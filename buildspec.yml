@@ -26,3 +26,4 @@ artifacts:
   files:
   # export artifacts needed for deployments to an S3 bucket
     - $TEMPLATE_FILE_NAME
+    - check_stat_status.sh

@@ -1,0 +1,33 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.x
+    commands:
+      - echo Entered the INSTAL phase
+      - yum update -y
+      - yum install jq git -y -q
+      - echo Configuring aws cli...
+      - pip3 install awsebcli --upgrade
+      - pip install --upgrade awscli
+      - aws configure set default.region $REGION
+  build:
+    commands:
+      - echo "====================="
+      - echo current directory is $CODEBUILD_SRC_DIR
+      - ls -la
+      - echo STACK_NAME = $STACK_NAME REGION = $REGION
+      - echo validate stack status ...
+      - STACK_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --region $REGION | jq -r '.Stacks[] .StackStatus')
+      - echo STACK_STATUS = $STACK_STATUS
+      # - ./check_stat_status.sh $STACK_NAME $REGION
+      - "if [[ $STACK_STATUS =~ ^(UPDATE_COMPLETE|CREATE_COMPLETE|IMPORT_COMPLETE)$ ]]; then echo $STACK_STATUS: stack status is healthy; else echo $STACK_STATUS: stack status is NOT healthy; exit 1; fi"
+  post_build:
+    commands:
+      - echo "====================="
+      - echo CFN stack was successfully tested!
+artifacts:
+  files:
+  # export artifacts needed for deployments to an S3 bucket
+    - $TEMPLATE_FILE_NAME
