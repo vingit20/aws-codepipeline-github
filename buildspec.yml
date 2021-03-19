@@ -21,7 +21,7 @@ phases:
   post_build:
     commands:
       - echo "====================="
-      - echo project was successfully built
+      - echo project was successfully built!
 artifacts:
   files:
   # export artifacts needed for deployments to an S3 bucket
