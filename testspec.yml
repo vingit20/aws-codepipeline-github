@@ -27,7 +27,3 @@ phases:
     commands:
       - echo "====================="
       - echo CFN stack was successfully tested!
-artifacts:
-  files:
-  # export artifacts needed for deployments to an S3 bucket
-    - $TEMPLATE_FILE_NAME
