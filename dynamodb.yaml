@@ -3,7 +3,7 @@ Parameters:
   TableNameParameter:
     Type: String
     Description: S3 Bucket Name
-    Default: nathan-table
+    Default: nathan-table-2
 Resources:
 # Create DynamoDB table
   AppTable:
