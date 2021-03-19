@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  TableNameParameter:
+    Type: String
+    Description: S3 Bucket Name
+    Default: nathan-table
+Resources:
+# Create DynamoDB table
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Ref TableNameParameter
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+# IAM Role that will allow access to the DynamoDB : read and write
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-app-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonDynamoDBReadOnlyAccess
