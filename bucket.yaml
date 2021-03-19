@@ -3,7 +3,7 @@ Parameters:
   BucketNameParameter:
     Type: String
     Description: S3 Bucket Name
-    Default: nb-lab-12-1-codepipeline
+    Default: nb-lab-12-2-codepipeline
 Resources:
   S3Bucket:
     Type: AWS::S3::Bucket
