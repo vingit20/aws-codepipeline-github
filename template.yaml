@@ -2,9 +2,20 @@ AWSTemplateFormatVersion: '2010-09-09'
 Parameters:
   TableNameParameter:
     Type: String
+    Description: DynamoDB Table Name
+    Default: demo-table
+  BucketNameParameter:
+    Type: String
     Description: S3 Bucket Name
-    Default: nathan-table-2
+    Default: demo-bucket-eytytgh    
 Resources:
+# create demo s3 bucket
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketNameParameter
+    DeletionPolicy: Delete
+
 # Create DynamoDB table
   AppTable:
     Type: AWS::DynamoDB::Table
