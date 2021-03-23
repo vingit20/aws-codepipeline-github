@@ -1,0 +1,379 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: > 
+  Create CodePipeline pipline
+Parameters:
+  GitHubUser:
+    Type: String
+    Description: GitHub User
+    
+  GitHubRepo:
+    Type: String
+    Description: GitHub Repo to pull from. Only the Name. not the URL
+    Default: "aws-codepipeline-github"
+  GitHubBranch:
+    Type: String
+    Description: GitHub Branch
+    Default: "main"
+  GitHubToken:
+    NoEcho: true
+    Type: String
+    Default: '{{resolve:secretsmanager:github/personal-access-token:SecretString}}'
+    Description: GitHub Token. Must be defined in AWS Secrets Manager and here https://github.com/settings/tokens  
+  StackName:
+    Type: String
+    Default: deno-create-resources-stack
+  TemplateFileName:
+    Type: String
+    Default: "template.yaml" 
+Resources:
+# create Artifact bucket
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-artifacts"
+    DeletionPolicy: Retain
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:* 
+            Resource:
+              - !Sub arn:aws:s3:::${ArtifactBucket}
+              - !Sub arn:aws:s3:::${ArtifactBucket}/*
+            Principal:
+              AWS:
+                - !GetAtt [PipeLineRole,Arn]
+                - !GetAtt [CFNdeployerRole,Arn]
+
+# IAM execution role that trusts CloudFormation to create an S3 bucket
+  CFNdeployerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-cfn-deployer-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  CFNexecPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-create-s3-policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+              - s3:DeleteBucket # in case we need to replace existing bucket
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - dynamodb:Create*
+              - dynamodb:Describe*
+              - dynamodb:Update*
+              - dynamodb:DeleteTable
+            Resource: "*"       
+          - Effect: Allow
+            Action:
+              - iam:ListRoles
+              - iam:ListPolicies
+              - iam:CreateRole
+              - iam:CreatePolicy
+              - iam:GetRole
+              - iam:DeleteRole
+              - iam:PutRolePolicy
+              - iam:PassRole
+              - iam:getRolePolicy
+              - iam:TagResource
+              - iam:DeleteRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+            Resource: "*"
+      Roles:
+        - !Ref CFNdeployerRole
+
+# IAM execution role that trusts the CodeBuild service and provides sufficient permissions to perform the actions  
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-codebuild-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  CodeBuildPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-create-s3-policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow # access to artifact bucket
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+            Resource: 
+              - !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+              - !Sub "arn:aws:s3:::${ArtifactBucket}" 
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+            Resource:  "*"
+          - Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - cloudformation:ListStacks
+              - cloudformation:Describe* 
+            Resource:  "*"
+          - Effect: Allow
+            Action:
+              - codebuild:ListBuilds
+              - codebuild:UpdateProject
+              - codebuild:ListProjects
+              - codebuild:CreateReportGroup
+              - codebuild:CreateReport
+              - codebuild:BatchPutTestCases
+              - codebuild:UpdateReport          
+            Resource:  "*"                             
+      Roles:
+        - !Ref CodeBuildRole
+
+# --- create codeBuild projects ---
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-codebuild-project"
+      Artifacts:
+        Type: CODEPIPELINE
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: TEMPLATE_FILE_NAME
+            Value: !Ref TemplateFileName
+          - Name: REGION
+            Value: !Ref AWS::Region        
+
+  TestProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-codebuild-project-runtest"
+      Artifacts:
+        Type: CODEPIPELINE
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: testspec.yml
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: STACK_NAME
+            Value: !Ref StackName
+          - Name: REGION
+            Value: !Ref AWS::Region
+# --- IAM execution role that trusts the CodePipeline service and provides sufficient permissions to deploy CloudFormation stack  
+  PipeLineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-codepipeline-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  PipeLinePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-pipeline-policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - cloudformation:Describe*
+              - cloudFormation:List*
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+              - cloudformation:UpdateTerminationProtection
+              - cloudformation:TagResource
+              - cloudformation:UntagResource
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:GetBucketVersioning
+              - s3:ListBucket
+            Resource: 
+              - !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+              - !Sub "arn:aws:s3:::${ArtifactBucket}"             
+      Roles:
+        - !Ref PipeLineRole
+# --------------------------------            
+# --- create codePipeline -------  
+# --------------------------------      
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${AWS::StackName}-pipeline"
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      RoleArn: !GetAtt PipeLineRole.Arn
+      Stages:
+        # 1 stage - source - github
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              RunOrder: 1             
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: SourceOutput
+        # 2 stage - build - CodeBuild        
+        - Name: Build
+          Actions:
+            # 2.1 - create changeset
+            - Name: ValidateTemplate
+              RunOrder: 1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput                
+              Configuration:
+                ProjectName: !Ref BuildProject
+              OutputArtifacts:
+                - Name: BuildOutput                            
+        # 3 stage - deploy - cloudformation    
+        - Name: Creation
+          Actions:
+            # 3.1 - create changeset
+            - Name: CreateChangeSet
+              RunOrder: 1
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Ref StackName
+                ChangeSetName: !Sub "${StackName}-changeset"
+                Capabilities: CAPABILITY_IAM,CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CFNdeployerRole.Arn
+                TemplatePath: !Sub "SourceOutput::${TemplateFileName}"
+        # 4 Approval action        
+        - Name: ApproveDeploy
+          Actions:
+          - Name: ApproveDeployProd
+            ActionTypeId:
+              Category: Approval
+              Owner: AWS
+              Version: '1'
+              Provider: Manual
+            Configuration:
+              CustomData: "Check CFN stack changeset before approving."
+        # 5 stage - execution - cloudformation    
+        - Name: Execution
+          Actions:
+            - Name: DeployChangeSet
+              RunOrder: 1
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS  
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Ref StackName
+                ChangeSetName: !Sub "${StackName}-changeset"
+                RoleArn: !GetAtt CFNdeployerRole.Arn
+              OutputArtifacts:
+                - Name: DeployOutput                        
+        # 6 stage - test - CodeBuild        
+        - Name: Test
+          Actions:
+            - Name: CheckStackStatus
+              RunOrder: 1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput                
+              Configuration:
+                ProjectName: !Ref TestProject
+              OutputArtifacts:
+                - Name: TestOutput                  
+
+Outputs:
+  CFNdeployerRole:
+    Value: !Ref CFNdeployerRole
+  CodeBuildRole:
+    Value: !Ref CodeBuildRole
+  PipeLineRole:
+    Value: !Ref PipeLineRole        
